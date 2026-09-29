@@ -1,0 +1,26 @@
+# Procesamiento de PDFs
+PyMuPDF>=1.24.0
+pdfplumber>=0.11.0
+
+# Modelos locales
+ollama>=0.3.0
+
+# Base de datos
+psycopg2-binary>=2.9.9
+pgvector>=0.3.0
+
+# Configuración
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# Utilidades
+tqdm>=4.66.0
+
+
+# Transformers
+transformers>=4.40.0
+
+# API HTTP
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.8.0
