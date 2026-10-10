@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 # Asegurar que la raíz del proyecto esté en sys.path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -32,9 +32,9 @@ from typing import Optional
 import ollama
 from dotenv import load_dotenv
 
-from storage.database import Database
-from ingestion.embedder import embed_query
-from core.text_normalizer import normalize
+from src.storage.database import Database
+from src.ingestion.embedder import embed_query
+from src.core.text_normalizer import normalize
 
 load_dotenv()
 

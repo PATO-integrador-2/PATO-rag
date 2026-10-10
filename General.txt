@@ -1,6 +1,0 @@
-Al inicio se penso hacer un rag normal, debido a que se tienen diferentes categorias 
-y la información puede no ser la misma para todas, se hace necesario usar un RAG multidominio
-con taxonomía. 
-
-
-

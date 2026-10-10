@@ -1,51 +1,53 @@
 """
-Módulo de normalización de texto.
+Text normalization module.
 
-Se encarga de dejar los textos en una forma canónica para comparaciones:
-- Todo en minúsculas
-- Sin tildes
-- Sin puntuación
-- Con espacios colapsados
-- Guiones bajos convertidos a espacios
-
+Leaves texts in a canonical form for comparisons:
+- Lowercase
+- No accents
+- No punctuation
+- Collapsed whitespace
+- Underscores converted to spaces
 """
 import unicodedata
 import re
+import sys
+from pathlib import Path
 
-# Función de normalización
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 def normalize(text: str) -> str:
-    
+    """Return a canonical version of the text for keyword matching."""
     if not text:
         return ""
-    # Convertir a minúsculas
     text = text.lower()
-    # Descomponer caracteres Unicode y eliminar  (tildes, ñ → n)
+    # Decompose unicode and strip combining marks (tildes, ñ → n)
     text = unicodedata.normalize("NFKD", text)
     text = "".join(c for c in text if not unicodedata.combining(c))
-    # Convertir guiones bajos a espacios para unificar "acceso_agua" y "acceso agua"
+    # Underscores → spaces so "acceso_agua" and "acceso agua" match
     text = text.replace("_", " ")
-    # Eliminar puntuación
+    # Remove punctuation
     text = re.sub(r"[^\w\s]", " ", text)
-    # Colapsar espacios múltiples
+    # Collapse whitespace
     text = " ".join(text.split())
     return text
 
-# Generar variantes de un término para aumentar la probabilidad de match en el texto
 def generate_variants(term: str) -> list[str]:
-    
+    """Generate simple variants of a term to increase match probability."""
     base = term.replace("_", " ").strip()
     base_norm = normalize(base)
     variants = {base_norm}
 
-    # Variante con preposición "a" para términos tipo "acceso X"
+    # Add "a" preposition for "acceso X" → "acceso a X"
     if base_norm.startswith("acceso ") and not base_norm.startswith("acceso a "):
         variants.add(base_norm.replace("acceso ", "acceso a ", 1))
 
-    # Variante con "sin acceso a" para términos tipo "sin X"
+    # Add "sin acceso a" for "sin X"
     if base_norm.startswith("sin ") and not base_norm.startswith("sin acceso a "):
         variants.add(base_norm.replace("sin ", "sin acceso a ", 1))
 
-    # Singular/plural simple
+    # Simple singular/plural
     if base_norm.endswith("s"):
         variants.add(base_norm[:-1])
     else:
@@ -55,7 +57,6 @@ def generate_variants(term: str) -> list[str]:
 
 
 if __name__ == "__main__":
-    # Pruebas rápidas de normalización
     test_cases = [
         ("Niñez", "ninez"),
         ("HACINAMIENTO CRÍTICO", "hacinamiento critico"),
@@ -64,5 +65,5 @@ if __name__ == "__main__":
     ]
     for entry, expected in test_cases:
         result = normalize(entry)
-        status = "✅" if expected in result else "❌"
+        status = "✓" if expected in result else "X"
         print(f"{status} normalize({entry!r}) = {result!r}")

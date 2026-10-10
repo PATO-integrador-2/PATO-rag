@@ -1,83 +1,104 @@
 """
-Punto de entrada de la API HTTP del RAG.
-Ejecutar: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
-"""
-import os
-import sys
-from pathlib import Path
-from contextlib import asynccontextmanager
+FastAPI application entry point.
 
-# Asegurar que la raíz del proyecto esté en sys.path
+Usage:
+    uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+Endpoints:
+    GET  /health    → system status
+    GET  /version   → API version
+    POST /ask       → main question-answering endpoint
+    GET  /docs      → interactive Swagger UI
+    GET  /redoc     → ReDoc documentation
+"""
+import sys
+import logging
+from pathlib import Path
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
+from fastapi.responses import JSONResponse
 
-from src.api.routes import router
-from src.api.dependencies import shutdown_retriever, get_retriever
+from src.api.routes import health, ask
 
-load_dotenv()
-
-API_TITLE = os.getenv("API_TITLE", "RAG IPM API")
-API_VERSION = os.getenv("API_VERSION", "1.0.0")
-
-
-
-# Ciclo de vida
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Inicializa recursos al arrancar y los libera al apagar."""
-    print(" Iniciando API del RAG...")
-    try:
-        # Inicializar el retriever (abre pool de conexiones)
-        get_retriever()
-        print(" Retriever inicializado")
-    except Exception as e:
-        print(f"  No se pudo inicializar el retriever: {e}")
-        print("   La API arrancará igual, pero las consultas fallarán.")
-
-    yield
-
-    print(" Apagando API...")
-    shutdown_retriever()
-    print(" Retriever cerrado")
+# ============================================================
+# Logging
+# ============================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
-
-# Aplicación FastAPI
-
+# ============================================================
+# App
+# ============================================================
 app = FastAPI(
-    title=API_TITLE,
-    version=API_VERSION,
+    title="PATO-rag API",
     description=(
-        "API del RAG (Retrieval-Augmented Generation) para consultar "
-        "documentos sobre pobreza multidimensional en Latinoamérica."
+        "API de IA generativa sobre pobreza multidimensional (IPM) "
+        "en Colombia y Latinoamérica.\n\n"
+        "Módulos: data (SQL), simulation, rag, recommendation."
     ),
-    lifespan=lifespan,
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
-# CORS (ajustar origins en producción)
+# CORS (allow all for now; tighten in production)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          #  En producción, restringir
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Rutas
-app.include_router(router)
+
+# ============================================================
+# Routes
+# ============================================================
+app.include_router(health.router)
+app.include_router(ask.router)
 
 
+@app.get("/", tags=["root"])
+def root():
+    """Root endpoint — quick info."""
+    return {
+        "name": "PATO-rag API",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/health",
+        "ask": "POST /ask",
+    }
+
+
+# ============================================================
+# Global error handler
+# ============================================================
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logger.exception("Error no manejado: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Error interno del servidor", "error": str(exc)[:200]},
+    )
+
+
+# ============================================================
+# Direct run
+# ============================================================
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "src.api.main:app",
-        host=os.getenv("API_HOST", "0.0.0.0"),
-        port=int(os.getenv("API_PORT", "8000")),
+        host="0.0.0.0",
+        port=8000,
         reload=True,
     )

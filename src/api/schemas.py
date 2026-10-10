@@ -1,86 +1,77 @@
 """
-Esquemas Pydantic para la API del RAG.
-Definen el contrato de request y response del endpoint /api/rag/ask.
+Pydantic schemas for the API.
+
+Defines request/response models for all endpoints.
 """
 from typing import Optional, Literal
 from pydantic import BaseModel, Field
 
 
 # ============================================================
-# Request
+# Common
 # ============================================================
-class PreviousMessage(BaseModel):
-    """Un mensaje previo dentro del contexto de la conversación."""
-    role: Literal["user", "assistant", "system", "tool"]
-    content: str
+class TokenUsage(BaseModel):
+    """Token usage for the request."""
+    input_tokens: int = Field(0, description="Tokens consumidos en el prompt")
+    output_tokens: int = Field(0, description="Tokens generados en la respuesta")
+    total_tokens: int = Field(0, description="Suma de input + output")
 
 
-class ContextPayload(BaseModel):
-    """Contexto previo enviado opcionalmente por el backend."""
-    previous_messages: list[PreviousMessage] = Field(default_factory=list)
-
-
-class FiltersPayload(BaseModel):
-    """Filtros opcionales para la búsqueda vectorial."""
-    domain: Optional[str] = None
-    dimension: Optional[str] = None
-    indicator: Optional[str] = None
-    top_k: int = Field(default=5, ge=1, le=20)
-
-
-class AskRequest(BaseModel):
-    """Request del endpoint /api/rag/ask."""
-    conversation_id: Optional[str] = Field(
-        default=None,
-        description="UUID de la conversación existente. Null si es la primera pregunta.",
-    )
-    session_id: Optional[str] = Field(
-        default=None,
-        description="UUID de la sesión del usuario (opcional).",
-    )
-    user_id: str = Field(..., description="UUID del usuario que hace la pregunta.")
-    question: str = Field(..., min_length=1, description="Pregunta del usuario.")
-    context: Optional[ContextPayload] = Field(
-        default=None,
-        description="Contexto previo (si el backend lo tiene).",
-    )
-    filters: Optional[FiltersPayload] = Field(
-        default=None,
-        description="Filtros opcionales para la búsqueda.",
-    )
-
-
-# ============================================================
-# Response
-# ============================================================
-class SourceItem(BaseModel):
-    """Una fuente citada en la respuesta."""
-    source: Optional[str] = None
-    document: Optional[str] = None
-    page: Optional[int] = None
-    dimension: Optional[str] = None
-    indicator: Optional[str] = None
+class Source(BaseModel):
+    """A cited source from the RAG knowledge base."""
+    document_id: Optional[str] = None
+    document_title: Optional[str] = None
+    document_url: Optional[str] = None
+    organization: Optional[str] = None
+    page_number: Optional[int] = None
+    chunk_index: Optional[int] = None
+    preview: Optional[str] = None
     similarity: Optional[float] = None
+    rrf_score: Optional[float] = None
+
+
+# ============================================================
+# /ask
+# ============================================================
+class AskRequest(BaseModel):
+    question: str = Field(
+        ...,
+        min_length=1,
+        max_length=1000,
+        description="Pregunta en español",
+        examples=["¿Cuál fue el IPM de Huila en 2018?"],
+    )
+    verbose: bool = Field(
+        False,
+        description="Si True, incluye detalles internos (módulo crudo, SQL, etc.)",
+    )
 
 
 class AskResponse(BaseModel):
-    """Response del endpoint /api/rag/ask."""
-    conversation_id: str
-    user_message_id: str
-    assistant_message_id: str
+    question: str
+    intent: Literal["data", "simulation", "rag", "recommendation"]
+    intent_reason: Optional[str] = None
+    intent_method: Optional[str] = None
     answer: str
-    sources: list[SourceItem]
-    detected_domain: Optional[str] = None
-    chunks_used: int
-    latency_ms: int
+    status: Literal["ok", "no_data", "not_implemented", "error"]
+    sources: list[Source] = Field(default_factory=list)
+    sql: Optional[dict | str] = None
+    tokens: TokenUsage = Field(default_factory=TokenUsage)
+    latency_ms: int = 0
+    raw: Optional[dict] = None  # only if verbose=True
 
 
+# ============================================================
+# /health
+# ============================================================
+class ComponentHealth(BaseModel):
+    name: str
+    status: Literal["ok", "degraded", "down"]
+    detail: Optional[str] = None
 
-# Health
 
 class HealthResponse(BaseModel):
-    """Response del endpoint /health."""
-    status: str
-    database: bool
-    ollama: bool
+    status: Literal["ok", "degraded", "down"]
     version: str
+    components: list[ComponentHealth]
+    uptime_seconds: Optional[float] = None

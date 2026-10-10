@@ -1,48 +1,24 @@
 """
-Conexión a la base de datos limpios (clean_data_db).
-
-Esta base contiene dos grupos independientes de datos:
-
-    GRUPO DANE (Colombia):
-        - ipm_incidence, ipm_contribution_dimension, ipm_deprivation_proportion,
-        ipm_deprivations_variable, ipm_incidence_household_head_sex,
-        ipm_incidence_person_sex, ipm_household_departmental
-        - ref_domain, ref_department, ref_dimension, ref_variable,
-        ref_region, ref_sex
-        - Cobertura: departamentos y dominios geográficos de Colombia
-
-    GRUPO CEPAL (Latinoamérica):
-        - latam_ipm_age_group, latam_ipm_deprivation_contribution,
-        latam_ipm_national_population
-        - ref_country, ref_age_group, ref_geographic_area,
-        ref_measurement_type, ref_deprivation
-        - Cobertura: países de Latinoamérica
-
-Los dos grupos son completamente independientes. NO se deben hacer JOINs
-entre tablas de distintos grupos.
-
-Se usa exclusivamente para responder preguntas de datos específicos
-vía Text-to-SQL. Se mantiene separada de:
-    - embedding_db (RAG de PDFs)
-    - user_management_db (conversaciones)
+Connection to the clean data database (clean_data_db) using psycopg v3.
 """
 import os
-import contextlib
+import sys
+import logging
+from pathlib import Path
 from typing import Optional
 
-import psycopg2
-from psycopg2 import pool as pg_pool
-from psycopg2.extras import RealDictCursor
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+import psycopg
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 from dotenv import load_dotenv
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
-# Definición de grupos
-# Cada grupo tiene:
-#   - label: nombre legible
-#   - views: vistas expuestas al LLM (las que el generador SQL puede usar)
-#   - ref_tables: tablas de referencia (catálogos)
-#   - keywords: palabras clave para el enrutador
 
 DATA_GROUPS = {
     "dane": {
@@ -57,25 +33,19 @@ DATA_GROUPS = {
             "vw_ipm_household_departmental",
         ],
         "ref_tables": [
-            "ref_domain",
-            "ref_department",
-            "ref_dimension",
-            "ref_variable",
-            "ref_region",
-            "ref_sex",
+            "ref_domain", "ref_department", "ref_dimension",
+            "ref_variable", "ref_region", "ref_sex",
         ],
         "keywords": [
             "colombia", "colombiano", "dane", "departamento", "municipio",
-            "antioquia", "huila", "bogota", "bogotá", "caribe", "andina",
-            "pacifico", "pacífico", "orinoquia", "amazonia", "amazonía",
-            "nacional", "cundinamarca", "valle", "atlantico", "atlántico",
-            "bolivar", "bolívar", "santander", "narino", "nariño", "cauca",
-            "choco", "chocó", "caldas", "risaralda", "quindio", "quindío",
-            "tolima", "cesar", "magdalena", "guajira", "cordoba", "córdoba",
-            "sucre", "bolivar", "boyaca", "boyacá", "casanare", "vichada",
-            "guainia", "guainía", "vaupes", "vaupés", "guaviare", "putumayo",
-            "caqueta", "caquetá", "arauca", "san andres", "san andrés",
-            "providencia",
+            "antioquia", "huila", "bogota", "caribe", "andina",
+            "pacifico", "orinoquia", "amazonia", "nacional",
+            "cundinamarca", "valle", "atlantico", "bolivar", "santander",
+            "narino", "cauca", "choco", "caldas", "risaralda", "quindio",
+            "tolima", "cesar", "magdalena", "guajira", "cordoba", "sucre",
+            "boyaca", "casanare", "vichada", "guainia", "vaupes",
+            "guaviare", "putumayo", "caqueta", "arauca",
+            "san andres", "providencia",
         ],
     },
     "cepal": {
@@ -86,28 +56,26 @@ DATA_GROUPS = {
             "vw_latam_ipm_national_population",
         ],
         "ref_tables": [
-            "ref_country",
-            "ref_age_group",
-            "ref_geographic_area",
-            "ref_measurement_type",
-            "ref_deprivation",
+            "ref_country", "ref_age_group", "ref_geographic_area",
+            "ref_measurement_type", "ref_deprivation",
         ],
         "keywords": [
-            "latinoamerica", "latinoamérica", "cepal", "america latina",
-            "américa latina", "region", "región", "regional",
-            "argentina", "brasil", "brazil", "mexico", "méxico", "chile",
-            "peru", "perú", "ecuador", "bolivia", "paraguay", "uruguay",
-            "costa rica", "panama", "panamá", "honduras", "guatemala",
+            "latinoamerica", "cepal", "america latina",
+            "region", "regional",
+            "argentina", "brasil", "brazil", "mexico", "chile",
+            "peru", "ecuador", "bolivia", "paraguay", "uruguay",
+            "costa rica", "panama", "honduras", "guatemala",
             "el salvador", "nicaragua", "cuba", "republica dominicana",
-            "república dominicana", "haiti", "haití", "venezuela",
+            "haiti", "venezuela",
             "rural", "urbano", "grupo de edad", "grupos de edad",
-            "pais", "país", "paises", "países",
+            "pais", "paises",
         ],
     },
 }
 
-# Cliente de PostgreSQL para la base de datos limpios.
+
 class DataDatabase:
+    """PostgreSQL client for the clean data database (psycopg v3)."""
 
     def __init__(
         self,
@@ -119,217 +87,131 @@ class DataDatabase:
         minconn: int = 1,
         maxconn: int = 5,
     ):
-        self.host = host or os.getenv("DATA_DB_HOST")
-        self.port = int(port or os.getenv("DATA_DB_PORT"))
-        self.dbname = dbname or os.getenv("DATA_DB_NAME")
-        self.user = user or os.getenv("DATA_DB_USER")
-        self.password = password or os.getenv("DATA_DB_PASSWORD")
+        self.host = host or os.getenv("DATA_DB_HOST", "localhost")
+        self.port = int(port or os.getenv("DATA_DB_PORT", "5432"))
+        self.dbname = dbname or os.getenv("DATA_DB_NAME", "clean_data_db")
+        self.user = user or os.getenv("DATA_DB_USER", "postgres")
+        self.password = password or os.getenv("DATA_DB_PASSWORD", "")
+
+        conninfo = (
+            f"host={self.host} port={self.port} dbname={self.dbname} "
+            f"user={self.user} password={self.password}"
+        )
 
         try:
-            self._pool = pg_pool.SimpleConnectionPool(
-                minconn=minconn, maxconn=maxconn,
-                host=self.host, port=self.port, dbname=self.dbname,
-                user=self.user, password=self.password,
+            self._pool = ConnectionPool(
+                conninfo=conninfo,
+                min_size=minconn,
+                max_size=maxconn,
+                kwargs={"row_factory": dict_row},
+                open=True,
             )
-        except psycopg2.Error as e:
+        except psycopg.Error as e:
             raise ConnectionError(
-                f"No se pudo crear el pool a {self.host}:{self.port}/{self.dbname}: {e}"
+                f"No se pudo crear el pool: {e}"
             ) from e
 
-    # Pool y cursores
-    @contextlib.contextmanager
-    def connection(self):
-        conn = self._pool.getconn()
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            self._pool.putconn(conn)
-
-    @contextlib.contextmanager
-    def cursor(self, dict_cursor: bool = True):
-        with self.connection() as conn:
-            cursor_factory = RealDictCursor if dict_cursor else None
-            cur = conn.cursor(cursor_factory=cursor_factory)
-            try:
-                yield cur
-            finally:
-                cur.close()
+        self._schema_cache: dict = {}
 
     def close(self):
-        if self._pool:
-            self._pool.closeall()
+        if getattr(self, "_pool", None):
+            self._pool.close()
 
     def ping(self) -> bool:
         try:
-            with self.cursor() as cur:
-                cur.execute("SELECT 1 AS ok")
-                return cur.fetchone()["ok"] == 1
+            with self._pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1 AS ok")
+                    return cur.fetchone()["ok"] == 1
         except Exception:
             return False
 
-    # Introspección
-    # Lista las vistas disponibles en el esquema public.
+    # ---------- Introspection ----------
     def list_views(self) -> list[str]:
-        with self.cursor() as cur:
-            cur.execute("""
-                SELECT table_name
-                FROM information_schema.views
-                WHERE table_schema = 'public'
-                ORDER BY table_name
-            """)
-            return [r["table_name"] for r in cur.fetchall()]
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT table_name
+                    FROM information_schema.views
+                    WHERE table_schema = 'public'
+                    ORDER BY table_name
+                """)
+                return [r["table_name"] for r in cur.fetchall()]
 
-    #Lista las tablas base en el esquema public.
-    def list_tables(self) -> list[str]:
-        with self.cursor() as cur:
-            cur.execute("""
-                SELECT table_name
-                FROM information_schema.tables
-                WHERE table_schema = 'public'
-                AND table_type = 'BASE TABLE'
-                ORDER BY table_name
-            """)
-            return [r["table_name"] for r in cur.fetchall()]
-
-    # Devuelve las columnas y tipos de una vista específica.
-    def get_view_columns(self, view_name: str) -> list[dict]:
-        with self.cursor() as cur:
-            cur.execute("""
-                SELECT column_name, data_type
-                FROM information_schema.columns
-                WHERE table_schema = 'public'
-                AND table_name = %s
-                ORDER BY ordinal_position
-            """, (view_name,))
-            return cur.fetchall()
-
-    # Devuelve las vistas del grupo indicado, verificando que existan realmente en la base de datos.
-    def get_views_by_group(self, group: str) -> list[str]:
-        
+    def get_group_schema(self, group: str, force_refresh: bool = False) -> dict:
         if group not in DATA_GROUPS:
             raise ValueError(f"Grupo desconocido: {group}")
-        existing = set(self.list_views())
-        return [v for v in DATA_GROUPS[group]["views"] if v in existing]
-
-    # Devuelve el esquema completo de un grupo:
-    def get_group_schema(self, group: str) -> dict:
-
-        if group not in DATA_GROUPS:
-            raise ValueError(f"Grupo desconocido: {group}")
+        if not force_refresh and group in self._schema_cache:
+            return self._schema_cache[group]
 
         info = DATA_GROUPS[group]
-        schema = {
-            "label": info["label"],
-            "views": {},
-            "ref_tables": {},
-        }
+        schema = {"label": info["label"], "views": {}, "ref_tables": {}}
 
-        for view in self.get_views_by_group(group):
-            schema["views"][view] = self.get_view_columns(view)
+        available_views = set(self.list_views())
+        allowed_views = [v for v in info["views"] if v in available_views]
 
-        # Las ref tables también pueden ser vistas o tablas base; se intentan ambas
-        for ref in info["ref_tables"]:
-            cols = self.get_view_columns(ref)
-            if not cols:
-                # Intentar como tabla base
-                with self.cursor() as cur:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                if allowed_views:
                     cur.execute("""
-                        SELECT column_name, data_type
+                        SELECT table_name, column_name, data_type
                         FROM information_schema.columns
                         WHERE table_schema = 'public'
-                        AND table_name = %s
-                        ORDER BY ordinal_position
-                    """, (ref,))
-                    cols = cur.fetchall()
-            if cols:
-                schema["ref_tables"][ref] = cols
+                          AND table_name = ANY(%s)
+                        ORDER BY table_name, ordinal_position
+                    """, (allowed_views,))
+                    for row in cur.fetchall():
+                        schema["views"].setdefault(row["table_name"], []).append({
+                            "column_name": row["column_name"],
+                            "data_type": row["data_type"],
+                        })
 
+                if info["ref_tables"]:
+                    cur.execute("""
+                        SELECT table_name, column_name, data_type
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = ANY(%s)
+                        ORDER BY table_name, ordinal_position
+                    """, (info["ref_tables"],))
+                    for row in cur.fetchall():
+                        schema["ref_tables"].setdefault(row["table_name"], []).append({
+                            "column_name": row["column_name"],
+                            "data_type": row["data_type"],
+                        })
+
+        self._schema_cache[group] = schema
         return schema
 
-    
-    # Ejecución de consultas (solo SELECT)
-    # Ejecuta un SELECT y devuelve las filas.
-    # Aplica timeout a nivel de transacción (compatible con PgBouncer).
-    def execute_select(self, sql: str, timeout_seconds: int = 15) -> list[dict]:
-
-        with self.cursor() as cur:
-            try:
+    # ---------- Execution ----------
+    def execute_select(
+        self,
+        sql: str,
+        params: Optional[dict] = None,
+        timeout_seconds: int = 15,
+    ) -> list[dict]:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
                 cur.execute(f"SET LOCAL statement_timeout = {timeout_seconds * 1000}")
-                cur.execute(sql)
+                cur.execute(sql, params or {})
                 return cur.fetchall()
-            except Exception as e:
-                raise RuntimeError(f"Error ejecutando SELECT: {e}") from e
 
-# Prueba directa
 
+# ============================================================
+# Direct test
+# ============================================================
 if __name__ == "__main__":
-    print("  TEST: Conexión a clean_data_db")
-    print("-" * 60)
-
+    logging.basicConfig(level=logging.INFO)
+    print("Test DataDatabase (psycopg v3)")
     try:
         db = DataDatabase()
-    except ConnectionError as e:
-        print(f"Error de conexión: {e}")
-        raise SystemExit(1)
-
-    if not db.ping():
-        print(" El ping falló")
-        raise SystemExit(1)
-
-    print(f" Conexión OK a {db.host}:{db.port}/{db.dbname}")
-    print(f" Usuario: {db.user}")
-
-    # Vistas por grupo
-    for group in DATA_GROUPS:
-        label = DATA_GROUPS[group]["label"]
-        views = db.get_views_by_group(group)
-        print(f"\n Grupo '{group}' ({label}) — {len(views)} vistas:")
-        for v in views:
-            print(f"  - {v}")
-
-    # Esquema resumido de cada grupo
-    print("\n" + "-" * 60)
-    print("  ESQUEMA POR GRUPO")
-    print("-" * 60)
-
-    for group in DATA_GROUPS:
-        print(f"\n--- Grupo: {group} ---")
-        schema = db.get_group_schema(group)
-
-        print(f"\n  Vistas ({len(schema['views'])}):")
-        for view_name, cols in schema["views"].items():
-            col_names = ", ".join(c["column_name"] for c in cols)
-            print(f"    {view_name}: [{col_names}]")
-
-        print(f"\n  Ref tables ({len(schema['ref_tables'])}):")
-        for ref_name, cols in schema["ref_tables"].items():
-            col_names = ", ".join(c["column_name"] for c in cols)
-            print(f"    {ref_name}: [{col_names}]")
-
-    # SELECT de prueba en cada grupo
-    print("\n" + "-" * 60)
-    print("  SELECT DE PRUEBA")
-    print("-" * 60)
-
-    print("\n DANE — vw_ipm_incidence LIMIT 3:")
-    try:
-        rows = db.execute_select("SELECT * FROM vw_ipm_incidence LIMIT 3")
-        for r in rows:
-            print(f"  {dict(r)}")
+        if db.ping():
+            print("✅ Conexión OK a clean_data_db")
+            for g in DATA_GROUPS:
+                views = db.get_group_schema(g)["views"]
+                print(f"  {g}: {len(views)} vistas")
+        else:
+            print("❌ Ping falló")
+        db.close()
     except Exception as e:
-        print(f" Error:  {e}")
-
-    print("\nCEPAL — vw_latam_ipm_national_population LIMIT 3:")
-    try:
-        rows = db.execute_select("SELECT * FROM vw_latam_ipm_national_population LIMIT 3")
-        for r in rows:
-            print(f"  {dict(r)}")
-    except Exception as e:
-        print(f" Error: {e}")
-
-    db.close()
-    print("  TEST COMPLETADO")
+        print(f"❌ Error: {e}")

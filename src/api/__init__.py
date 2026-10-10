@@ -1,0 +1,1 @@
+"""FastAPI layer for the PATO-rag system."""
