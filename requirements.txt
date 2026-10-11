@@ -5,9 +5,15 @@ pdfplumber>=0.11.0
 # Modelos locales
 ollama>=0.3.0
 
-# Base de datos
+# Base de datos — psycopg 3 (data_db.py, rag_retriever.py)
+psycopg[binary,pool]>=3.2.0
+# Base de datos — psycopg2 (database.py, user_database.py)
 psycopg2-binary>=2.9.9
+# pgvector (soporta ambos: pgvector.psycopg2 y pgvector.psycopg)
 pgvector>=0.3.0
+
+# Numérico (microsimulator.py)
+numpy>=1.26.0
 
 # Configuración
 pyyaml>=6.0
@@ -16,8 +22,7 @@ python-dotenv>=1.0.0
 # Utilidades
 tqdm>=4.66.0
 
-
-# Transformers
+# Transformers (tokenizer_utils.py)
 transformers>=4.40.0
 
 # API HTTP
