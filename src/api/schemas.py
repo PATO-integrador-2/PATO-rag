@@ -53,7 +53,7 @@ class AskResponse(BaseModel):
     intent_reason: Optional[str] = None
     intent_method: Optional[str] = None
     answer: str
-    status: Literal["ok", "no_data", "not_implemented", "error"]
+    status: Literal["ok", "no_data", "not_implemented", "error", "no_context"]
     sources: list[Source] = Field(default_factory=list)
     sql: Optional[dict | str] = None
     tokens: TokenUsage = Field(default_factory=TokenUsage)
