@@ -203,16 +203,53 @@ def get_dimensions(source: str) -> dict[str, list[str]]:
 
 
 def label_to_column(source: str, label: str) -> Optional[str]:
-    """Map a Spanish deprivation label back to its column name."""
+    """
+    Map a Spanish or English deprivation label to the canonical column/name.
+
+    For DANE: maps Spanish label → dep_* column.
+    For CEPAL: maps both Spanish and English labels → canonical English name.
+    """
     source = source.upper()
-    label_lower = label.lower().strip()
-    table = DANE_LABEL_TO_COLUMN if source == "DANE" else CEPAL_LABEL_TO_COLUMN
-    if label_lower in table:
-        return table[label_lower]
-    # Substring match
-    for lab, col in table.items():
-        if lab in label_lower or label_lower in lab:
-            return col
+    label_norm = label.lower().strip()
+
+    if source == "DANE":
+        table = DANE_LABEL_TO_COLUMN
+        # Reverse map: if label is already a column key (dep_*), return it
+        if label_norm in DANE_DEPRIVATION_LABELS or label_norm in DANE_WEIGHTS:
+            return label_norm
+        # Direct match
+        if label_norm in table:
+            return table[label_norm]
+        # Substring match
+        for lab, col in table.items():
+            if lab in label_norm or label_norm in lab:
+                return col
+        return None
+
+    if source == "CEPAL":
+        # For CEPAL, the canonical names are the English keys.
+        # Accept both Spanish labels and English keys.
+
+        # 1. Already an English key?
+        for eng in CEPAL_DEPRIVATION_LABELS.keys():
+            if label_norm == eng.lower():
+                return eng
+
+        # 2. Already a Spanish label?
+        for eng, esp in CEPAL_DEPRIVATION_LABELS.items():
+            if label_norm == esp.lower():
+                return eng
+
+        # 3. Substring match (English or Spanish)
+        for eng, esp in CEPAL_DEPRIVATION_LABELS.items():
+            eng_l, esp_l = eng.lower(), esp.lower()
+            if label_norm in eng_l or eng_l in label_norm:
+                return eng
+            if label_norm in esp_l or esp_l in label_norm:
+                return eng
+
+        return None
+
     return None
 
 

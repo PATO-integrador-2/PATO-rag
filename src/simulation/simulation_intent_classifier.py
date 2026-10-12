@@ -5,6 +5,10 @@ Classifies a Spanish question into one of 12 simulation intents.
 Uses qwen2.5:1.5b (fast, reliable for short JSON).
 
 On any failure, falls back to `no_data`.
+
+Countries:
+    - Colombia → "department" or "national" (DANE microdata).
+    - Other CEPAL countries → "country" (aggregate contributions).
 """
 import os
 import sys
@@ -13,7 +17,6 @@ import json
 import logging
 from pathlib import Path
 from typing import Optional
-from src.simulation.simulation_intent_postprocessor import postprocess
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -36,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 INTENT_LLM_MODEL = os.getenv(
     "OLLAMA_INTENT_MODEL",
-    os.getenv("OLLAMA_SQL_MODEL", "qwen2.5:7b"),
+    os.getenv("OLLAMA_SQL_MODEL", "qwen2.5:1.5b"),
 )
 INTENT_MAX_TOKENS = int(os.getenv("INTENT_MAX_TOKENS", "220"))
 INTENT_TEMPERATURE = float(os.getenv("INTENT_TEMPERATURE", "0.0"))
@@ -46,24 +49,49 @@ OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost:11434")
 # Valid intents and their required params
 # ============================================================
 VALID_INTENTS = {
-    # Improvement
-    "reduce_one_deprivation":    {"required": ["deprivation"],          "optional": ["delta_pct", "entity_type", "entity_name", "year"]},
-    "eliminate_one_deprivation": {"required": ["deprivation"],          "optional": ["entity_type", "entity_name", "year"]},
-    "reduce_multiple":           {"required": ["changes"],              "optional": ["entity_type", "entity_name", "year"]},
+    "reduce_one_deprivation":    {"required": ["deprivation"], "optional": ["delta_pct", "entity_type", "entity_name", "year"]},
+    "eliminate_one_deprivation": {"required": ["deprivation"], "optional": ["entity_type", "entity_name", "year"]},
+    "reduce_multiple":           {"required": ["changes"],     "optional": ["entity_type", "entity_name", "year"]},
     "target_ipm":                {"required": ["deprivation", "target_ipm"], "optional": ["entity_type", "entity_name", "year"]},
     "compare_improvements":      {"required": ["deprivation_a", "deprivation_b", "delta_pct"], "optional": ["entity_type", "entity_name"]},
     "dimension_impact":          {"required": ["dimension", "delta_pct"], "optional": ["entity_type", "entity_name", "year"]},
-    # Worsening
-    "increase_one_deprivation":  {"required": ["deprivation"],          "optional": ["delta_pct", "entity_type", "entity_name", "year"]},
+    "increase_one_deprivation":  {"required": ["deprivation"], "optional": ["delta_pct", "entity_type", "entity_name", "year"]},
     "worsen_all_in_dimension":   {"required": ["dimension", "delta_pct"], "optional": ["entity_type", "entity_name"]},
-    "increase_multiple":         {"required": ["changes"],              "optional": ["entity_type", "entity_name", "year"]},
+    "increase_multiple":         {"required": ["changes"],     "optional": ["entity_type", "entity_name", "year"]},
     "target_ipm_increase":       {"required": ["deprivation", "target_ipm"], "optional": ["entity_type", "entity_name", "year"]},
     "compare_worsenings":        {"required": ["deprivation_a", "deprivation_b", "delta_pct"], "optional": ["entity_type", "entity_name"]},
-    # Fallback
     "no_data":                   {"required": [], "optional": []},
 }
 
-VALID_ENTITY_TYPES = {"national", "department", "region"}
+VALID_ENTITY_TYPES = {"national", "department", "country"}
+
+VALID_DIMENSIONS = {"educacion", "ninez y juventud", "salud", "trabajo", "vivienda"}
+
+
+# ============================================================
+# Country lists
+# ============================================================
+COLOMBIA_DEPARTMENTS = {
+    "huila", "antioquia", "bogota", "choco", "narino", "cauca",
+    "valle del cauca", "atlantico", "bolivar", "santander", "cordoba",
+    "sucre", "boyaca", "tolima", "cesar", "magdalena", "la guajira",
+    "guajira", "caldas", "risaralda", "quindio", "caqueta", "putumayo",
+    "meta", "casanare", "vichada", "guainia", "guaviare", "vaupes",
+    "amazonas", "arauca", "san andres", "providencia", "cundinamarca",
+    "norte de santander",
+}
+
+CEPAL_COUNTRIES = {
+    "chile", "colombia", "costa rica", "dominican republic",
+    "ecuador", "el salvador", "guatemala", "honduras", "mexico",
+    "panama", "paraguay",
+}
+
+# Países NO soportados (existen en CEPAL pero sin datos de IPM/contribuciones)
+UNSUPPORTED_COUNTRIES = {
+    "argentina", "brasil", "brazil", "peru", "bolivia", "venezuela",
+    "cuba", "nicaragua", "uruguay",
+}
 
 
 # ============================================================
@@ -91,7 +119,7 @@ class SimulationIntentClassifier:
                     "top_p": 0.9,
                     "num_predict": INTENT_MAX_TOKENS,
                     "stop": ["\n\n", "###"],
-                },  
+                },
             )
             raw = response.get("response", "").strip()
             tokens = {
@@ -119,13 +147,8 @@ class SimulationIntentClassifier:
         try:
             data = json.loads(cleaned)
         except json.JSONDecodeError as exc:
-            repaired = self._repair_json(cleaned)
-            try:
-                data = json.loads(repaired)
-                logger.info("JSON repaired successfully.")
-            except json.JSONDecodeError:
-                logger.warning("JSON inválido del clasificador: %s — %r", exc, cleaned[:200])
-                return {"intent": "no_data", "params": {}}
+            logger.warning("JSON inválido: %s — %r", exc, cleaned[:200])
+            return {"intent": "no_data", "params": {}}
 
         intent = (data.get("intent") or "").strip().lower().replace(" ", "_")
         if intent not in VALID_INTENTS:
@@ -206,6 +229,34 @@ class SimulationIntentClassifier:
             else:
                 clean[key] = value
 
+        # --- Detect country and set entity_type correctly ---
+        entity_name = clean.get("entity_name", "").lower().strip()
+
+        if entity_name:
+            # 1. Colombian department → "department"
+            if entity_name in COLOMBIA_DEPARTMENTS:
+                clean["entity_type"] = "department"
+
+            # 2. Colombia → "national"
+            elif entity_name == "colombia":
+                clean["entity_type"] = "national"
+                clean.pop("entity_name", None)
+
+            # 3. CEPAL country (≠ Colombia) → "country"
+            elif entity_name in CEPAL_COUNTRIES:
+                clean["entity_type"] = "country"
+
+            # 4. Unsupported country → no_data
+            elif entity_name in UNSUPPORTED_COUNTRIES:
+                logger.warning("País no soportado para simulación: %s", entity_name)
+                return None
+
+            # 5. Unknown entity → treat as national
+            else:
+                logger.warning("Entidad desconocida: %s. Asumiendo nacional.", entity_name)
+                clean.pop("entity_name", None)
+                clean["entity_type"] = "national"
+
         # Default entity_type
         if "entity_type" not in clean:
             clean["entity_type"] = "national"
@@ -218,10 +269,9 @@ class SimulationIntentClassifier:
                 )
                 return None
 
-        # delta_pct sign sanity checks
+        # Delta sign sanity checks
         if intent in ("reduce_one_deprivation", "reduce_multiple", "dimension_impact",
                       "compare_improvements"):
-            # These are improvements: force negative delta
             if "delta_pct" in clean and clean["delta_pct"] > 0:
                 clean["delta_pct"] = -abs(clean["delta_pct"])
         if intent in ("increase_one_deprivation", "increase_multiple",
@@ -229,7 +279,6 @@ class SimulationIntentClassifier:
             if "delta_pct" in clean and clean["delta_pct"] < 0:
                 clean["delta_pct"] = abs(clean["delta_pct"])
 
-        # Default delta_pct if missing
         if intent in ("reduce_one_deprivation", "increase_one_deprivation"):
             clean.setdefault("delta_pct", -10 if intent.startswith("reduce") else 10)
 
@@ -255,36 +304,10 @@ class SimulationIntentClassifier:
 
     @staticmethod
     def _match_dimension(name: str) -> Optional[str]:
-        """
-        Match a Spanish dimension name to a canonical key in DANE_DIMENSIONS.
-        Accepts variations with/without accents: 'Educacion', 'Educación', etc.
-        Returns the exact key used in DANE_DIMENSIONS (e.g. 'Educación').
-        """
-        from src.simulation.ipm_weights import DANE_DIMENSIONS
-
         key = normalize(name).strip()
-        if not key:
-            return None
-
-        # normalize() strips accents: "educación" → "educacion"
-        # We compare against the normalized canonical names.
-        aliases = {
-            "educacion": "Educación",
-            "ninez y juventud": "Niñez y Juventud",
-            "ninez": "Niñez y Juventud",
-            "juventud": "Niñez y Juventud",
-            "salud": "Salud",
-            "trabajo": "Trabajo",
-            "vivienda": "Vivienda",
-        }
-        if key in aliases:
-            return aliases[key]
-
-        # Substring match as a fallback
-        for alias, canonical in aliases.items():
-            if alias in key or key in alias:
-                return canonical
-
+        for valid in VALID_DIMENSIONS:
+            if valid in key or key in valid:
+                return valid.title().replace(" Y ", " y ")
         return None
 
 
@@ -297,16 +320,11 @@ if __name__ == "__main__":
     tests = [
         "¿Qué pasaría si el hacinamiento crítico bajara 10% en Huila?",
         "Si se elimina el analfabetismo en Antioquia",
-        "Si el trabajo informal baja 20% y la deserción escolar 15%",
-        "¿Cuánto hay que reducir el trabajo informal para que el IPM llegue a 20%?",
-        "¿Qué reduce más: hacinamiento o analfabetismo, ambos al 10%?",
-        "Si la dimensión Educación mejora 20%",
-        "¿Qué pasa si el trabajo informal sube 15% en Antioquia?",
-        "Si empeora toda la dimensión Vivienda 20%",
-        "Si el analfabetismo sube 10% y el desempleo 5%",
-        "¿Cuánto debe subir el trabajo informal para que el IPM llegue a 35% en La Guajira?",
-        "¿Qué aumenta más: hacinamiento o trabajo informal al 10%?",
-        "¿Cuál es el IPM de Huila?",  # no_data
+        "¿Qué pasaría si el hacinamiento baja 10% en México?",
+        "Si la contribución de Internet sube 20% en Chile",
+        "Si el trabajo informal sube 15% en Antioquia",
+        "Si el hacinamiento baja 20% en Argentina",  # ← no soportado
+        "¿Qué es el hacinamiento crítico?",           # ← no es simulación
     ]
     for q in tests:
         r = clf.classify(q)
