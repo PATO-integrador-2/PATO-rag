@@ -35,6 +35,7 @@ from src.rag.rag_config import (
     TOP_K_SEMANTIC, TOP_K_LEXICAL, TOP_K_FINAL, MIN_SCORE,
     MIN_TOKENS_FOR_VECTOR_FALLBACK,
     SQL_HYBRID_SEARCH,
+    OLLAMA_HOST,
 )
 
 logger = logging.getLogger(__name__)
@@ -123,9 +124,11 @@ class RagRetriever:
     # Embedding
     # ----------------------------------------------------------
     def _embed_query(self, query: str) -> list[float]:
-        import ollama
+        from ollama import Client
+        client = Client(host=OLLAMA_HOST)
+
         prefixed = PREFIX_QUERY + query.strip()
-        response = ollama.embeddings(model=EMBED_MODEL, prompt=prefixed)
+        response = client.embeddings(model=EMBED_MODEL, prompt=prefixed)
         vector = response.get("embedding", [])
         if len(vector) != EXPECTED_EMBED_DIM:
             raise RuntimeError(

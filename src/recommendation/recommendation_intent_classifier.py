@@ -16,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import ollama
+from ollama import Client
 from dotenv import load_dotenv
 
 from src.core.text_normalizer import normalize
@@ -28,7 +28,7 @@ from src.recommendation.recommendation_prompts import RECOMMENDATION_INTENT_PROM
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost:11434")
 # ============================================================
 # Valid values
 # ============================================================
@@ -116,7 +116,8 @@ class RecommendationIntentClassifier:
         prompt = RECOMMENDATION_INTENT_PROMPT.format(question=question)
 
         try:
-            response = ollama.generate(
+            client = Client(host=OLLAMA_HOST)
+            response = client.generate(
                 model=self.model,
                 prompt=prompt,
                 options={

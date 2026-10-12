@@ -29,7 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from typing import Optional
 
-import ollama
+from ollama import Client
 from dotenv import load_dotenv
 
 from src.storage.database import Database
@@ -43,6 +43,7 @@ load_dotenv()
 # ============================================================
 LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "qwen2.5:1.7b")
 TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "5"))
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost:11434")
 
 # Enrutador: palabras clave → dominio
 # Se usa para filtrar la búsqueda vectorial y evitar mezclar
@@ -204,7 +205,8 @@ RESPUESTA (en español, citando fuentes):"""
     def _generate(self, prompt: str) -> str:
         """Genera la respuesta con Qwen vía Ollama."""
         try:
-            response = ollama.generate(
+            client = Client(host=OLLAMA_HOST)
+            response = client.generate(
                 model=LLM_MODEL,
                 prompt=prompt,
                 options={
