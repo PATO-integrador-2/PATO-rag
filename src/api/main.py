@@ -11,9 +11,16 @@ Endpoints:
     GET  /docs      → interactive Swagger UI
     GET  /redoc     → ReDoc documentation
 """
+import os
+from dotenv import load_dotenv
 import sys
 import logging
 from pathlib import Path
+
+load_dotenv()
+
+API_HOST=os.getenv("API_HOST", "0.0.0.0")
+API_PORT=int(os.getenv("API_PORT", "8000"))
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -98,7 +105,7 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "src.api.main:app",
-        host="0.0.0.0",
-        port=8000,
+        host=API_HOST,
+        port=API_PORT,
         reload=True,
     )
