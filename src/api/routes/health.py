@@ -11,6 +11,9 @@ import time
 import logging
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 from src.api.schemas import HealthResponse, ComponentHealth
 from src.storage.data_db import DataDatabase
@@ -20,14 +23,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["health"])
 
 APP_START_TIME = time.time()
-API_VERSION = "1.0.0"
+API_VERSION = os.getenv("API_VERSION", "1.0.0")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost:11434")
 
 
 def _check_ollama() -> ComponentHealth:
     """Check if Ollama is reachable and list available models."""
     try:
-        import ollama
-        response = ollama.list()
+        from ollama import Client
+        client = Client(host=OLLAMA_HOST)
+        
+        response = client.list()
         # Handle both dict and object responses
         if isinstance(response, dict):
             models = response.get("models", [])

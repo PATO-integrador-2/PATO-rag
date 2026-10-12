@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import ollama
+from ollama import Client
 from dotenv import load_dotenv
 
 from src.rag.rag_config import (
@@ -26,6 +26,7 @@ from src.rag.rag_config import (
 from src.rag.rag_prompts import RAG_ANSWER_PROMPT
 
 load_dotenv()
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost:11434")
 logger = logging.getLogger(__name__)
 
 
@@ -80,7 +81,8 @@ class RagAnswerBuilder:
         prompt = RAG_ANSWER_PROMPT.format(context=context, question=question)
 
         try:
-            response = ollama.generate(
+            client = Client(host=OLLAMA_HOST)
+            response = client.generate(
                 model=self.model,
                 prompt=prompt,
                 options={

@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import ollama
+from ollama import Client
 from dotenv import load_dotenv
 
 from src.core.text_normalizer import normalize
@@ -41,7 +41,7 @@ INTENT_LLM_MODEL = os.getenv(
 INTENT_MAX_TOKENS = int(os.getenv("INTENT_MAX_TOKENS", "220"))
 INTENT_TEMPERATURE = float(os.getenv("INTENT_TEMPERATURE", "0.0"))
 
-
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost:11434")
 # ============================================================
 # Valid intents and their required params
 # ============================================================
@@ -82,7 +82,8 @@ class SimulationIntentClassifier:
         prompt = SIMULATION_INTENT_PROMPT.format(question=question)
 
         try:
-            response = ollama.generate(
+            client = Client(host=OLLAMA_HOST)
+            response = client.generate(
                 model=self.model,
                 prompt=prompt,
                 options={

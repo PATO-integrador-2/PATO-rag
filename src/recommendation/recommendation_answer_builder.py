@@ -24,7 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import ollama
+from ollama import Client
 from dotenv import load_dotenv
 
 from src.recommendation.recommendation_config import (
@@ -35,7 +35,7 @@ from src.recommendation.recommendation_prompts import RECOMMENDATION_ANSWER_PROM
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost:11434")
 # ============================================================
 # Text sanitization
 # ============================================================
@@ -170,7 +170,8 @@ class RecommendationAnswerBuilder:
         max_rows = 5 if _user_asked_more(question) else 3
 
         try:
-            response = ollama.generate(
+            client = Client(host=OLLAMA_HOST)
+            response = client.generate(
                 model=self.model,
                 prompt=prompt,
                 options={
