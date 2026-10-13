@@ -1,20 +1,13 @@
 """
-Central router / orchestrator.
+Central router / orchestrator with memory support.
 
-The single entry point for the entire generative AI. All external
-consumers (FastAPI, CLI, tests) call `Orchestrator.ask()` and never
-the modules directly.
-
-Flow:
-    1. Classify the question → data | simulation | rag | recommendation.
-    2. Dispatch to the corresponding module.
-    3. Return a unified response.
-
+The single entry point for the entire generative AI.
 Modules:
     - data           → SqlGenerator
     - simulation     → SimulationGenerator
-    - rag            → RagGenerator (placeholder for now)
-    - recommendation → RecommendationGenerator (placeholder for now)
+    - rag            → RagGenerator
+    - recommendation → RecommendationGenerator
+    - general        → GeneralGenerator (guarded fallback)
 """
 import os
 import sys
@@ -29,16 +22,17 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.orchestrator.intent_classifier import OrchestratorIntentClassifier
 from src.orchestrator.response_builder import ResponseBuilder
+from src.general.general_generator import GeneralGenerator
 
+load_dotenv = None
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 logger = logging.getLogger(__name__)
 
-
-# ============================================================
-# Lazy module loaders
-# ============================================================
-# We avoid importing the heavy modules at the top so the orchestrator
-# can be imported even if some modules are not yet implemented.
 
 def _load_sql_generator():
     from src.retrieval.sql_generator import SqlGenerator
@@ -60,40 +54,27 @@ def _load_recommendation_generator():
     return RecommendationGenerator
 
 
-# ============================================================
-# Orchestrator
-# ============================================================
 class Orchestrator:
-    """
-    Central router that decides which module handles a question.
-
-    Example:
-        orch = Orchestrator()
-        result = orch.ask("¿Cuál fue el IPM de Huila en 2018?")
-        print(result["answer"])
-        orch.close()
-    """
+    """Central router that decides which module handles a question."""
 
     def __init__(
         self,
         classifier: Optional[OrchestratorIntentClassifier] = None,
         response_builder: Optional[ResponseBuilder] = None,
+        general_generator: Optional[GeneralGenerator] = None,
         use_llm_classifier: bool = True,
     ):
         self.classifier = classifier or OrchestratorIntentClassifier(
             use_llm=use_llm_classifier
         )
         self.response_builder = response_builder or ResponseBuilder()
+        self.general_generator = general_generator or GeneralGenerator()
 
-        # Lazy-loaded module instances
         self._sql_gen = None
         self._sim_gen = None
         self._rag_gen = None
         self._rec_gen = None
 
-    # ----------------------------------------------------------
-    # Lifecycle
-    # ----------------------------------------------------------
     def close(self):
         for gen in (self._sql_gen, self._sim_gen, self._rag_gen, self._rec_gen):
             if gen is not None and hasattr(gen, "close"):
@@ -107,93 +88,60 @@ class Orchestrator:
     # ----------------------------------------------------------
     def _get_sql(self):
         if self._sql_gen is None:
-            cls = _load_sql_generator()
-            self._sql_gen = cls()
+            self._sql_gen = _load_sql_generator()()
         return self._sql_gen
 
     def _get_simulation(self):
         if self._sim_gen is None:
-            cls = _load_simulation_generator()
-            self._sim_gen = cls()
+            self._sim_gen = _load_simulation_generator()()
         return self._sim_gen
 
     def _get_rag(self):
         if self._rag_gen is None:
-            cls = _load_rag_generator()
-            if cls is None:
-                return None
-            self._rag_gen = cls()
+            self._rag_gen = _load_rag_generator()()
         return self._rag_gen
 
     def _get_recommendation(self):
         if self._rec_gen is None:
-            cls = _load_recommendation_generator()
-            if cls is None:
-                return None
-            self._rec_gen = cls()
+            self._rec_gen = _load_recommendation_generator()()
         return self._rec_gen
 
     # ----------------------------------------------------------
     # Public API
     # ----------------------------------------------------------
-    def ask(self, question: str, verbose: bool = False) -> dict:
-        """
-        Classify the question, dispatch it, and return a unified response.
-
-        Response shape:
-            {
-                "question": str,
-                "intent": "data" | "simulation" | "rag" | "recommendation",
-                "intent_reason": str,
-                "intent_method": "llm" | "keyword",
-                "answer": str,
-                "sources": list,          # RAG only
-                "sql": str | dict | None, # data only
-                "simulation": dict | None,# simulation only
-                "status": "ok" | "no_data" | "not_implemented" | "error",
-                "latency_ms": int,
-                "raw": dict,              # raw module response
-            }
-        """
+    def ask(
+        self,
+        question: str,
+        history: Optional[list[dict]] = None,
+        verbose: bool = False,
+    ) -> dict:
         start = time.time()
 
-        # 1. Classify
-        classification = self.classifier.classify(question)
+        # 1. Classify (with optional history for reformulation)
+        classification = self.classifier.classify(question, history=history)
         intent = classification["intent"]
+        effective_question = classification.get("question", question)
 
         if verbose:
             print(f"[Orchestrator] Intent: {intent} ({classification['method']})")
-            print(f"[Orchestrator] Reason: {classification.get('reason', '')}")
+            print(f"[Orchestrator] Effective question: {effective_question}")
+            if classification.get("reformulated"):
+                print(f"[Orchestrator] Original: {question}")
 
         # 2. Dispatch
         try:
             if intent == "data":
-                raw = self._get_sql().answer(question, verbose=verbose)
+                raw = self._get_sql().answer(effective_question, verbose=verbose)
             elif intent == "simulation":
-                raw = self._get_simulation().answer(question, verbose=verbose)
+                raw = self._get_simulation().answer(effective_question, verbose=verbose)
             elif intent == "rag":
-                rag = self._get_rag()
-                if rag is None:
-                    return self.response_builder.not_implemented(
-                        question, intent, classification, start,
-                        message=(
-                            "El módulo de consultas conceptuales (RAG) aún no "
-                            "está conectado en este entorno. Intenta con una "
-                            "pregunta de datos o de simulación."
-                        ),
-                    )
-                raw = rag.answer(question, verbose=verbose)
+                raw = self._get_rag().answer(effective_question, verbose=verbose)
             elif intent == "recommendation":
-                rec = self._get_recommendation()
-                if rec is None:
-                    return self.response_builder.not_implemented(
-                        question, intent, classification, start,
-                        message=(
-                            "El módulo de recomendaciones aún no está disponible. "
-                            "Pronto podré sugerirte proyectos e intervenciones."
-                        ),
-                    )
-                raw = rec.answer(question, verbose=verbose)
+                raw = self._get_recommendation().answer(effective_question, verbose=verbose)
+            elif intent == "general":
+                raw = self.general_generator.answer(
+                    effective_question, history=history, verbose=verbose,
+                )
             else:
                 return self.response_builder.error(
                     question, intent, classification, start,
@@ -206,7 +154,7 @@ class Orchestrator:
                 error=f"Error ejecutando el módulo: {exc}",
             )
 
-        # 3. Normalize into unified response
+        # 3. Normalize
         return self.response_builder.build(
             question=question,
             intent=intent,
@@ -225,17 +173,18 @@ if __name__ == "__main__":
     try:
         tests = [
             "¿Cuál fue el IPM de Huila en 2018?",
-            "¿Qué pasaría si el hacinamiento crítico bajara 10% en Huila?",
+            "¿Qué pasaría si el hacinamiento baja 10%?",
             "¿Qué es el hacinamiento crítico?",
-            "¿Qué proyectos puedo implementar para reducir el IPM en Antioquia?",
+            "¿Qué proyectos para reducir el hacinamiento?",
+            "Cuéntame la historia del IPM",
         ]
         for q in tests:
             print(f"\n{'=' * 70}")
             print(f"❓ {q}")
-            r = orch.ask(q, verbose=False)
-            print(f"  Intent: {r['intent']} ({r['intent_method']})")
+            r = orch.ask(q)
+            print(f"  Intent: {r['intent']}")
             print(f"  Status: {r['status']}")
             print(f"  Latency: {r['latency_ms']} ms")
-            print(f"  Answer: {r['answer'][:250]}")
+            print(f"  Answer: {r['answer'][:200]}")
     finally:
         orch.close()

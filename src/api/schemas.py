@@ -1,7 +1,5 @@
 """
 Pydantic schemas for the API.
-
-Defines request/response models for all endpoints.
 """
 from typing import Optional, Literal
 from pydantic import BaseModel, Field
@@ -11,14 +9,12 @@ from pydantic import BaseModel, Field
 # Common
 # ============================================================
 class TokenUsage(BaseModel):
-    """Token usage for the request."""
-    input_tokens: int = Field(0, description="Tokens consumidos en el prompt")
-    output_tokens: int = Field(0, description="Tokens generados en la respuesta")
-    total_tokens: int = Field(0, description="Suma de input + output")
+    input_tokens: int = Field(0)
+    output_tokens: int = Field(0)
+    total_tokens: int = Field(0)
 
 
 class Source(BaseModel):
-    """A cited source from the RAG knowledge base."""
     document_id: Optional[str] = None
     document_title: Optional[str] = None
     document_url: Optional[str] = None
@@ -34,31 +30,29 @@ class Source(BaseModel):
 # /ask
 # ============================================================
 class AskRequest(BaseModel):
-    question: str = Field(
-        ...,
-        min_length=1,
-        max_length=1000,
-        description="Pregunta en español",
-        examples=["¿Cuál fue el IPM de Huila en 2018?"],
-    )
-    verbose: bool = Field(
-        False,
-        description="Si True, incluye detalles internos (módulo crudo, SQL, etc.)",
-    )
+    question: str = Field(..., min_length=1, max_length=1000)
+    user_id: str = Field(..., description="UUID del usuario (backend lo provee)")
+    conversation_id: str = Field(..., description="UUID de la conversación (backend lo provee)")
+    verbose: bool = Field(False)
 
 
 class AskResponse(BaseModel):
     question: str
-    intent: Literal["data", "simulation", "rag", "recommendation"]
+    intent: Literal["data", "simulation", "rag", "recommendation", "general"]
     intent_reason: Optional[str] = None
     intent_method: Optional[str] = None
+    reformulated: bool = False
+    effective_question: Optional[str] = None
     answer: str
-    status: Literal["ok", "no_data", "not_implemented", "error", "no_context"]
+    status: Literal[
+        "ok", "no_data", "no_context", "not_implemented",
+        "error", "validation_error", "rejected",
+    ]
     sources: list[Source] = Field(default_factory=list)
     sql: Optional[dict | str] = None
     tokens: TokenUsage = Field(default_factory=TokenUsage)
     latency_ms: int = 0
-    raw: Optional[dict] = None  # only if verbose=True
+    raw: Optional[dict] = None
 
 
 # ============================================================
@@ -73,5 +67,10 @@ class ComponentHealth(BaseModel):
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded", "down"]
     version: str
-    components: list[ComponentHealth]
+    components: list[ComponentHealth] = Field(default_factory=list)
     uptime_seconds: Optional[float] = None
+
+
+class VersionResponse(BaseModel):
+    name: str
+    version: str
