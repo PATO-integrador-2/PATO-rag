@@ -43,7 +43,7 @@ TOP_K_LEXICAL = int(os.getenv("RAG_TOP_K_LEXICAL", "50"))
 TOP_K_FINAL = int(os.getenv("RAG_TOP_K_FINAL", "10"))
 MIN_SCORE = float(os.getenv("RAG_MIN_SCORE", "0.50"))
 RRF_K = int(os.getenv("RAG_RRF_K", "60"))
-MIN_TOKENS_FOR_VECTOR_FALLBACK = 4
+MIN_TOKENS_FOR_VECTOR_FALLBACK = 1
 
 
 # ============================================================
